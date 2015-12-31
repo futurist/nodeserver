@@ -1,5 +1,8 @@
+'use strict'
+
 var http = require('http'),
     httpProxy = require('http-proxy');
+var util = require('util');
 var url = require('url');
 var path = require('path');
 var fs = require('fs');
@@ -19,6 +22,30 @@ var defaultIndex = [
   'index.php',
   'index.py',
 ];
+
+
+var GlobalIt = null;
+function* isExists (files, findCB, resultCB) {
+	var filesObj = files.map(v=> ({file:v, isFile:null}) )
+	for(let v, i=0, n=files.length; i<n; i++) {
+		let foundFile = yield fs.stat(files[i], (err, stat)=>{ findCB(err,stat,i,filesObj,resultCB) } )
+		if(foundFile) return resultCB&&resultCB(foundFile)
+	}
+	resultCB(null)
+}
+
+function findFileFunc(err, stat, i, filesObj, resultCB) {
+	filesObj[i].isFile = Boolean(stat&&stat.isFile());
+	for(let v, i=0, n=filesObj.length; v=filesObj[i], i<n; i++) {
+		if(typeof v.isFile!=='boolean') break;
+		if(v.isFile) {
+			GlobalIt.next(v.file)  // here terminate the generator, with { value: undefined, done: true }
+			return
+		}
+	}
+	GlobalIt.next()
+}
+
 
 function fileExists(filePath) {
   try {
@@ -77,30 +104,40 @@ function route(pathname, request, response){
 http.createServer(function (request, response) {
   var pathname = parseUrl(request.url).pathname;
   var filename = rootDir+pathname;
+  var notFound = ()=>{
+  		response.statusCode = 404;
+		response.statusMessage = 'Not found';
+		return response.end();
+  }
+
   fs.stat( filename, function(err, stat){
   	
-    if(err){ 
+    if(err || !stat ){ 
 
     	// check is virtul dir/file
 	    var isJsonAPI = /^\/json-api\//.test( pathname );
 	    if(isJsonAPI) return doJsonAPI(request, response);
 
 		// not found
-		response.statusCode = 404;
-		response.statusMessage = 'Not found';
-		return response.end();
+		return notFound()
     }
 
     if( stat.isDirectory() ){
       // console.log('dir', pathname)
-      defaultIndex.some(function(v) {
-        var indexFile = path.join(filename, v)
-        if( fileExists(indexFile) ){
-          route(indexFile, request, response)
-          return true
-        }
-        return false
-      })
+
+      	// using generator function + async to not block when find a index file
+		var it = isExists(
+			defaultIndex.map( v=>path.join(filename, v) ), // index files path array
+			findFileFunc, // helper function to iterate when not found right index
+			function(indexFile){
+				util.inspect(GlobalIt, true, null)
+				if(indexFile) route(indexFile, request, response)
+				else notFound()
+			}
+		)
+		GlobalIt = it;
+		it.next()
+
     } else {
       // console.log('file', pathname)
       route(pathname, request, response)
