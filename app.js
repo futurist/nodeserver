@@ -24,28 +24,14 @@ var defaultIndex = [
 ];
 
 
-var GlobalIt = null;
 function* isExists (files, findCB, resultCB) {
 	var filesObj = files.map(v=> ({file:v, isFile:null}) )
-	for(let v, i=0, n=files.length; i<n; i++) {
-		let foundFile = yield fs.stat(files[i], (err, stat)=>{ findCB(err,stat,i,filesObj,resultCB) } )
+	for(let v of filesObj) {
+		let foundFile = yield fs.stat(v.file, (err, stat)=>{ findCB(err,stat,v,filesObj) } )
 		if(foundFile) return resultCB&&resultCB(foundFile)
 	}
 	resultCB(null)
 }
-
-function findFileFunc(err, stat, i, filesObj, resultCB) {
-	filesObj[i].isFile = Boolean(stat&&stat.isFile());
-	for(let v, i=0, n=filesObj.length; v=filesObj[i], i<n; i++) {
-		if(typeof v.isFile!=='boolean') break;
-		if(v.isFile) {
-			GlobalIt.next(v.file)  // here terminate the generator, with { value: undefined, done: true }
-			return
-		}
-	}
-	GlobalIt.next()
-}
-
 
 function fileExists(filePath) {
   try {
@@ -111,8 +97,8 @@ http.createServer(function (request, response) {
   }
 
   fs.stat( filename, function(err, stat){
-  	
-    if(err || !stat ){ 
+
+    if(err || !stat ){
 
     	// check is virtul dir/file
 	    var isJsonAPI = /^\/json-api\//.test( pathname );
@@ -128,14 +114,22 @@ http.createServer(function (request, response) {
       	// using generator function + async to not block when find a index file
 		var it = isExists(
 			defaultIndex.map( v=>path.join(filename, v) ), // index files path array
-			findFileFunc, // helper function to iterate when not found right index
-			function(indexFile){
-				util.inspect(GlobalIt, true, null)
+			function findFileFunc(err, stat, f, filesObj) {
+				f.isFile = Boolean(stat&&stat.isFile());
+				for(let v of filesObj) {
+					if(typeof v.isFile!=='boolean') break;
+					if(v.isFile) {
+						it.next(v.file)  // here terminate the generator, with { value: undefined, done: true }
+						return
+					}
+				}
+				it.next();
+			},
+			function resultCB(indexFile) {
 				if(indexFile) route(indexFile, request, response)
 				else notFound()
 			}
 		)
-		GlobalIt = it;
 		it.next()
 
     } else {
@@ -143,7 +137,7 @@ http.createServer(function (request, response) {
       route(pathname, request, response)
     }
 
-    
+
 
   })
 
