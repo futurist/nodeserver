@@ -6,12 +6,13 @@ var util = require('util');
 var url = require('url');
 var path = require('path');
 var fs = require('fs');
+var mime = require('mime');
 var staticServer = require('node-static');
 
 var rootDir = '/home/1111hui/public_html'
 
 var fileServer = new staticServer.Server(rootDir);
-var proxy = new httpProxy.createProxyServer({});
+var proxy = new httpProxy.createProxyServer({xfwd:true, ws:true, changeOrigin:true});
 
 var apacheUrls = [
   /\.php|\.py$/,
@@ -63,9 +64,23 @@ function doJsonAPI (request, response){
       });
 }
 
+function doNodeInspector (request, response){
+      // serve node-inspector
+      proxy.web(request, response, {
+        target: 'http://127.0.0.1:8080/?ws=127.0.0.1:8080&port=5858'
+      });
+}
+
+
+
+
 function doStatic (request, response){
   // serve static file using node-static
    request.addListener('end', function () {
+   	  // add mime type to header
+	  var pathname = parseUrl(request.url).pathname;
+   	  response.setHeader('content-type', mime.lookup( pathname ) );
+   	  
       fileServer.serve(request, response, function (err, result) {
           if (err) { // There was an error serving the file
               console.error("Error serving " + request.url + " - " + err.message);
@@ -103,6 +118,9 @@ http.createServer(function (request, response) {
     	// check is virtul dir/file
 	    var isJsonAPI = /^\/json-api\//.test( pathname );
 	    if(isJsonAPI) return doJsonAPI(request, response);
+
+		var isNodeInspector = /^\/node-debug\//.test(pathname);
+		if(isNodeInspector) return doNodeInspector(request,response);
 
 		// not found
 		return notFound()
